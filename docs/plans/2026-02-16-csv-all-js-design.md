@@ -796,6 +796,374 @@ Understand は言語ごとにプロジェクトを作成する場合がある。
 | 名前空間の取得 | 不要（クラスが名前空間を兼ねる） | `func.longname()` と `func.name()` の差分 |
 | セレクタ・イベント名 | なし | Lexer API でトークン走査 |
 
-**kindstring の違い**: Java では `"class"` / `"method"` だが、JS では `"file"` / `"function"` を使用する。
+**kindstring の違い**: Java では `"class"` / `"method"` だが、JS（Web 言語ファミリー）では `"file"` / `"function"` を使用する。Understand 内部では `Web Javascript Function` 等のプレフィックス付きだが、kindstring フィルタでは部分一致するため `"function"` で十分。
 
 **名前空間の違い**: Java では `cls.longname()` がそのまま名前空間+クラス名になるが、JS では `func.longname()` からファイルパスプレフィックスを除き、`func.name()` を引いた残りが名前空間になる。
+
+---
+
+## 付録 A: Understand API クイックリファレンス
+
+本設計書で使用する Understand Java API のメソッドを、このドキュメント単体で理解できるよう整理する。
+
+### A.1 主要クラスとオブジェクトモデル
+
+```
+Understand.open(path)
+    └→ Database
+         ├→ db.ents(kindstring)           → Entity[]
+         ├→ db.close()
+         │
+         Entity
+         ├→ entity.name()                 → String（短縮名: "save"）
+         ├→ entity.longname()             → String（完全修飾名: "TaskManager.save"）
+         ├→ entity.kind()                 → Kind
+         │    └→ kind.name()              → String（"Web Javascript Function"）
+         ├→ entity.refs(refkind, entkind, unique) → Reference[]
+         ├→ entity.filerefs(refkind, entkind, unique) → Reference[]
+         ├→ entity.depends()              → Map<Entity, Reference[]>
+         ├→ entity.dependsby()            → Map<Entity, Reference[]>
+         └→ entity.lexer(lookupEnts, showInactive, expandMacros) → Lexer
+              └→ Lexer
+                   ├→ lexer.first()       → Lexeme
+                   └→ lexer.lexeme(line, column) → Lexeme
+                        └→ Lexeme
+                             ├→ lex.text()      → String（トークン文字列）
+                             ├→ lex.token()     → String（トークン種別名）
+                             ├→ lex.entity()    → Entity（関連エンティティ or null）
+                             ├→ lex.reference() → Reference（関連参照 or null）
+                             ├→ lex.next()      → Lexeme（次のトークン or null）
+                             ├→ lex.previous()  → Lexeme（前のトークン or null）
+                             ├→ lex.lineBegin() → int
+                             └→ lex.columnBegin() → int
+
+         Reference
+         ├→ ref.ent()                     → Entity（参照先エンティティ）
+         ├→ ref.file()                    → Entity（参照が記述されているファイル）
+         ├→ ref.scope()                   → Entity（参照元エンティティ）
+         ├→ ref.line()                    → int（行番号）
+         ├→ ref.column()                  → int（列番号）
+         └→ ref.kind()                    → Kind（参照の種別）
+              └→ kind.name()              → String（"Web Javascript Call"）
+```
+
+### A.2 `db.ents(kindstring)` — エンティティ一覧取得
+
+データベース内のエンティティを kindstring フィルタで絞り込んで取得する。
+
+```java
+Entity[] db.ents(String kindstring)
+```
+
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `kindstring` | `String` | エンティティ種別フィルタ。`null` で全エンティティ |
+| 戻り値 | `Entity[]` | 条件に一致するエンティティの配列 |
+
+**kindstring 構文**:
+
+| 構文 | 説明 | 例 |
+|------|------|-----|
+| 単一指定 | その種別のみ | `"function"` |
+| 複数指定（カンマ区切り） | いずれかに該当 | `"function, variable"` |
+| 否定（`~` プレフィックス） | 除外 | `"~unknown"` |
+| 組み合わせ | 種別指定 + 除外 | `"file ~unknown ~unresolved"` |
+
+kindstring はエンティティの Kind 名に対する**部分一致**フィルタ。`"function"` は `Web Javascript Function`、`Web Javascript Unnamed Function`、`Web Javascript Public Method Function` 等すべてにマッチする。
+
+### A.3 `entity.refs(refkindstring, entkindstring, unique)` — 参照一覧取得
+
+エンティティに関連する参照（Reference）を取得する。本設計の中核 API。
+
+```java
+Reference[] entity.refs(String refkindstring, String entkindstring, boolean unique)
+```
+
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `refkindstring` | `String` | 参照種別フィルタ。`null` で全種別 |
+| `entkindstring` | `String` | 参照先エンティティの種別フィルタ。`null` で全種別 |
+| `unique` | `boolean` | `true`: 同一エンティティへの重複参照を除去し、最初の1件のみ返す。`false`: 全件返す |
+| 戻り値 | `Reference[]` | 条件に一致する参照の配列 |
+
+**本設計での使用パターン**:
+
+| 呼び出し | refkindstring | entkindstring | unique | 意味 |
+|---------|---------------|---------------|--------|------|
+| `jsFile.refs("define", "function", true)` | `define` | `function` | `true` | ファイルが定義している関数（重複除去） |
+| `func.refs("call", "function", true)` | `call` | `function` | `true` | 関数が呼び出している関数 |
+| `func.refs("callby", "function", true)` | `callby` | `function` | `true` | 関数を呼び出している関数（逆方向） |
+| `func.refs("definein", "file", true)` | `definein` | `file` | `true` | 関数が定義されているファイル（逆引き） |
+| `cls.refs("definein", null, true)` | `definein` | `null`（全種別） | `true` | クラスの定義位置 |
+
+### A.4 `entity.filerefs(refkindstring, entkindstring, unique)` — ファイル内参照取得
+
+ファイルエンティティ内の全参照を取得する。`refs()` がエンティティ自身の参照を返すのに対し、`filerefs()` はファイル内に出現する**すべての参照**を返す。
+
+```java
+Reference[] entity.filerefs(String refkindstring, String entkindstring, boolean unique)
+```
+
+パラメータは `refs()` と同じ。**ファイルエンティティ以外に対して呼ぶと空配列を返す。**
+
+**`refs()` と `filerefs()` の違い**:
+
+| メソッド | 対象 | 返す参照 |
+|---------|------|---------|
+| `refs()` | 任意のエンティティ | そのエンティティ自身に関連する参照のみ |
+| `filerefs()` | ファイルエンティティ | ファイル内に出現するすべての参照（他のエンティティの参照も含む） |
+
+本設計では `filerefs()` を events.csv のステップ A（`.on()` 呼び出し位置の特定）で使用する。ファイル全体から `.on()` メソッドの呼び出し参照を横断的に検索するため。
+
+### A.5 `entity.depends()` / `entity.dependsby()` — 依存関係取得
+
+エンティティ間の集約的な依存関係を取得する。
+
+```java
+Map<Entity, Reference[]> entity.depends()    // このエンティティが依存している先
+Map<Entity, Reference[]> entity.dependsby()  // このエンティティに依存しているもの
+```
+
+| 戻り値の要素 | 説明 |
+|-------------|------|
+| Key（`Entity`） | 依存先（または依存元）のエンティティ |
+| Value（`Reference[]`） | その依存関係を構成する個々の参照の配列 |
+
+本設計では HTML → JS の `<script src>` 依存関係の取得に使用する。
+
+### A.6 `entity.lexer(lookupEnts, showInactive, expandMacros)` — 字句解析器
+
+ファイルエンティティから字句解析器（Lexer）を生成する。
+
+```java
+Lexer entity.lexer(boolean lookupEnts, boolean showInactive, boolean expandMacros)
+```
+
+| パラメータ | 型 | 説明 |
+|-----------|-----|------|
+| `lookupEnts` | `boolean` | `true`: 各 Lexeme に対応する Entity を関連付ける（`lex.entity()` が有効になる） |
+| `showInactive` | `boolean` | `true`: 非アクティブコード（`#ifdef` 除外部分）を含める。**JS では通常 `false`** |
+| `expandMacros` | `boolean` | `true`: マクロを展開する。**JS では通常 `false`** |
+| 戻り値 | `Lexer` | 字句解析器オブジェクト |
+
+**ファイルエンティティ以外に対して呼ぶと例外がスローされる。**
+
+### A.7 Lexeme の主要メソッド
+
+Lexeme はソースコードのトークン（字句）を表す。双方向連結リストを形成している。
+
+| メソッド | 戻り値 | 説明 |
+|---------|-------|------|
+| `text()` | `String` | トークンのテキスト内容（ソースコード上の文字列そのもの） |
+| `token()` | `String` | トークンの種別名（後述の一覧参照） |
+| `entity()` | `Entity` | 関連する Entity。`lexer()` の `lookupEnts=true` で生成した場合のみ有効。対応なしの場合は `null` |
+| `reference()` | `Reference` | 関連する Reference。`entity()` と同様に `lookupEnts=true` が必要。対応なしの場合は `null` |
+| `next()` | `Lexeme` | 次の Lexeme。ファイル末尾なら `null` |
+| `previous()` | `Lexeme` | 前の Lexeme。ファイル先頭なら `null` |
+| `lineBegin()` | `int` | トークンの開始行番号 |
+| `columnBegin()` | `int` | トークンの開始列番号 |
+
+### A.8 Entity の主要メソッド
+
+| メソッド | 戻り値 | 説明 |
+|---------|-------|------|
+| `name()` | `String` | 短縮名（例: `"save"`, `"taskManager.js"`） |
+| `longname()` | `String` | 完全修飾名（例: `"TaskManager.save"`, `"js/taskManager.js"`） |
+| `kind()` | `Kind` | エンティティの種別オブジェクト |
+| `type()` | `String` | 型情報（メソッドの戻り値型など。JS では `null` の場合が多い） |
+
+`kind().name()` で種別名の文字列を取得できる（例: `"Web Javascript Function"`）。
+
+### A.9 Reference の主要メソッド
+
+| メソッド | 戻り値 | 説明 |
+|---------|-------|------|
+| `ent()` | `Entity` | 参照先エンティティ |
+| `file()` | `Entity` | 参照が記述されているファイルの Entity |
+| `scope()` | `Entity` | 参照が発生しているスコープ（関数やクラス等）の Entity |
+| `line()` | `int` | 参照が発生している行番号 |
+| `column()` | `int` | 参照が発生している列番号 |
+| `kind()` | `Kind` | 参照の種別オブジェクト。`kind().name()` で名前取得 |
+
+---
+
+## 付録 B: JavaScript（Web）向け kindstring リファレンス
+
+Understand では JavaScript は **Web 言語ファミリー** に属し、kindstring のプレフィックスは `Web Javascript` となる。ただし `refs()` や `ents()` のフィルタでは**部分一致**のため、`"function"` と書けば `Web Javascript Function` 等すべてにマッチする。
+
+> **出典**: `C:\Program Files\SciTools\doc\manuals\python\kinds.html`（Web Entity Kinds / Web Reference Kinds セクション）
+
+### B.1 Entity kindstring（エンティティ種別）
+
+#### ファイル
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web File` | Web ファイル（HTML, CSS, JS 等） |
+| `Web Javascript Unresolved File` | 参照されているが見つからない JS ファイル |
+| `Web Unknown File` | 種別不明のファイル |
+
+#### 関数
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web Javascript Function` | 名前付き関数宣言・関数式 |
+| `Web Javascript Unnamed Function` | 無名関数 |
+| `Web Javascript Unnamed Global Function` | グローバルスコープの無名関数 |
+| `Web Javascript Unresolved Function` | 参照されているが解決できない関数 |
+| `Web Javascript Public Method Function` | パブリックメソッド |
+| `Web Javascript Public Method Function Static` | パブリック静的メソッド |
+| `Web Javascript Public Method Function Instance` | パブリックインスタンスメソッド |
+| `Web Javascript Protected Method Function` | プロテクトメソッド |
+| `Web Javascript Private Method Function` | プライベートメソッド |
+
+#### クラス
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web Javascript Class` | ES6 クラス宣言 |
+| `Web Javascript Function Class` | コンストラクタ関数（pre-ES6 パターン） |
+| `Web Javascript Unresolved Class` | 参照されているが解決できないクラス |
+
+#### 変数・プロパティ
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web Javascript Variable Global` | グローバルスコープの変数 |
+| `Web Javascript Variable Local` | ローカルスコープの変数 |
+| `Web Javascript Parameter` | 関数パラメータ |
+| `Web Javascript Public Property` | パブリックプロパティ |
+| `Web Javascript Private Property` | プライベートプロパティ |
+| `Web Javascript Unresolved Property` | 解決できないプロパティ |
+
+#### jQuery 固有
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web Javascript JQuery Selector` | jQuery セレクタ式（**`.on()` 解析で重要**） |
+
+#### その他
+
+| kindstring | 説明 |
+|-----------|------|
+| `Web Javascript Predefined Object` | 組み込みオブジェクト（`Math`, `JSON`, `console` 等） |
+| `Web Javascript Namespace` | 名前空間（TypeScript） |
+| `Web Javascript Interface` | インターフェース（TypeScript） |
+| `Web Javascript Enum` | 列挙型（TypeScript） |
+
+### B.2 Reference kindstring（参照種別）
+
+#### 定義系
+
+| kindstring | 逆方向 | 説明 |
+|-----------|--------|------|
+| `Web Javascript Define` | `Definein` | 標準的な定義 |
+| `Web Javascript Define Implicit` | `Definein` | 暗黙的な定義（解析器が推測） |
+| `Web Javascript Prototype Define Implicit` | `Definein` | プロトタイプ上の定義（`Foo.prototype.bar = ...`） |
+| `Web Javascript This Define Implicit` | `Definein` | `this` 経由の定義（`this.prop = ...`） |
+| `Web Javascript Define Export` | `Definein` | `export` 付き定義 |
+
+#### 呼び出し系
+
+| kindstring | 逆方向 | 説明 |
+|-----------|--------|------|
+| `Web Javascript Call` | `Callby` | 直接的な関数/メソッド呼び出し |
+| `Web Javascript Call Possible` | `Callby` | 呼び出しの可能性がある参照（動的解決） |
+| `Web Javascript Call Implicit` | `Callby` | 暗黙的な呼び出し（コンストラクタ、コールバック等） |
+| `Web Javascript Call New` | `Callby` | `new` 式（コンストラクタ呼び出し） |
+
+#### 使用系
+
+| kindstring | 逆方向 | 説明 |
+|-----------|--------|------|
+| `Web Javascript Use` | `Useby` | 変数/プロパティの読み取り |
+| `Web Javascript Use Ptr` | `Useby` | コールバック渡し等の参照使用 |
+| `Web Javascript Set` | `Setby` | 変数/プロパティへの代入 |
+| `Web Javascript Set Init` | `Setby` | 初期化代入（最初の代入） |
+| `Web Javascript Modify` | `Modifyby` | 値の変更（`x++`, `x += 1` 等） |
+
+#### インポート・継承系
+
+| kindstring | 逆方向 | 説明 |
+|-----------|--------|------|
+| `Web Javascript Import` | `Importby` | ES6 import 文 |
+| `Web Javascript Import From` | `Importby` | `import { x } from 'module'` |
+| `Web Javascript Require` | `Requireby` | CommonJS `require()` |
+| `Web Javascript Extend` | `Extendby` | クラス継承（`extends`） |
+| `Web Javascript Overrides` | `Overriddenby` | メソッドオーバーライド |
+
+#### HTML 固有（`<script src>` 関連）
+
+| kindstring | 逆方向 | 説明 |
+|-----------|--------|------|
+| `Web Html Src` | `Srcby` | **`<script src>` や `<img src>` 等の src 属性参照** |
+| `Web Html Call` | `Callby` | HTML からの関数呼び出し（`onclick="func()"` 等） |
+| `Web Html Link` | `Linkby` | `<link href>` 等のリンク参照 |
+| `Web Html Define` | `Definein` | HTML 内の定義 |
+
+### B.3 `Lexeme.token()` が返すトークン種別（JavaScript）
+
+| `token()` の値 | 意味 | 例 |
+|---------------|------|-----|
+| `Keyword` | 予約語 | `function`, `var`, `if`, `return` |
+| `Identifier` | 識別子 | `TaskManager`, `save`, `init` |
+| `Literal` | 数値リテラル | `42`, `3.14` |
+| `String` | 文字列リテラル | `'click'`, `".btn-save"` |
+| `Operator` | 演算子 | `+`, `=`, `===`, `.` |
+| `Punctuation` | 区切り文字 | `{`, `}`, `(`, `)`, `;`, `,` |
+| `Comment` | コメント | `// comment`, `/* ... */` |
+| `Whitespace` | 空白 | スペース、タブ |
+| `Newline` | 改行 | 改行文字 |
+
+---
+
+## 付録 C: 設計上の補足事項
+
+### C.1 `Web Javascript JQuery Selector` Entity の活用可能性
+
+Understand は jQuery セレクタ式を `Web Javascript JQuery Selector` エンティティとして認識する。
+これにより、events.csv のセレクタ抽出において、Lexer でのトークン走査に加えて、`db.ents("JQuery Selector")` で全セレクタを列挙できる可能性がある。
+
+```java
+// jQuery セレクタの全一覧を取得
+Entity[] selectors = db.ents("JQuery Selector");
+for (Entity sel : selectors) {
+    System.out.println(sel.name());  // ".btn-save", "#task-list" 等
+}
+```
+
+> **要検証**: セレクタ Entity と `.on()` 呼び出しの Reference がどう紐づくかは、実際の UDB で確認が必要。セレクタ Entity から `refs("callby")` で `.on()` への参照が取れれば、Lexer を使わないアプローチが可能。
+
+### C.2 `Web Html Src` Reference の活用可能性
+
+`<script src="...">` は `Web Html Src` 参照として記録される可能性がある。これが使えれば、`depends()` ではなく `refs("src", "file", true)` で HTML からインポートされた JS ファイルを正確に取得できる。
+
+```java
+// HTML ファイルの <script src> 参照を取得
+Reference[] srcRefs = htmlFile.refs("src", "file", true);
+for (Reference ref : srcRefs) {
+    Entity jsFile = ref.ent();
+    System.out.println(jsFile.name());  // "taskManager.js" 等
+}
+```
+
+### C.3 無名関数の Entity 名
+
+Understand は無名関数を `Web Javascript Unnamed Function` エンティティとして認識する。
+`name()` がどのような値を返すか（`"(anonymous)"`, `"(unnamed)"`, 空文字等）は要検証だが、Entity として存在するため `refs("call", "function", true)` で呼び出し先を取得できる可能性が高い。
+
+これにより、events.csv の「ハンドラ内呼び出し」取得が、Lexer フォールバック（セクション 8.2）ではなく `refs()` ベースで実装できる可能性がある。
+
+### C.4 本設計の「要検証」項目まとめ
+
+以下は実際の UDB で動作確認が必要な項目の一覧。
+
+| # | 項目 | 確認方法 | 影響するセクション |
+|---|------|---------|------------------|
+| 1 | `htmlFile.depends()` が `<script src>` の JS ファイルを返すか | HTML + JS プロジェクトの UDB で `depends()` を呼ぶ | 3.1, 6.3 |
+| 2 | `Web Html Src` 参照で `<script src>` を取得できるか | `htmlFile.refs("src", "file", true)` を試す | 付録 C.2 |
+| 3 | JS 関数の `longname()` のフォーマット（ファイルパスプレフィックスの有無） | 任意の JS 関数で `longname()` を出力 | 3.3, 6.4 |
+| 4 | 無名関数（`.on()` ハンドラ）の Entity 名 | `db.ents("Unnamed Function")` で名前を確認 | 4.2, 付録 C.3 |
+| 5 | 無名関数の `refs("call", "function", true)` でハンドラ内呼び出しが取れるか | `.on()` を含む JS で試す | 5.2 ステップ D |
+| 6 | `Web Javascript JQuery Selector` Entity がセレクタ文字列を `name()` で返すか | `db.ents("JQuery Selector")` で確認 | 付録 C.1 |
+| 7 | Understand が `.on()` メソッドをどのような参照種別で記録するか | `.on()` を含む JS で `filerefs("call")` を確認 | 5.2 ステップ A |
