@@ -6,19 +6,18 @@ import java.util.*;
  * 依存関係分析のサンプル。
  *
  * 使い方:
- *   java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス] [エンティティ名]
+ *   java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス]
  *
  * コマンド:
  *   file-deps   - ファイル間依存関係を表示
  *   class-deps  - クラス間依存関係を表示
  *   csv         - 依存関係をCSV出力（第3引数に出力パス）
- *   graph       - 依存関係グラフ画像を生成（第3引数に出力パス、第4引数にエンティティ名）
  */
 public class DependencyAnalyzer {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.err.println("使い方: java DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス] [エンティティ名]");
+            System.err.println("使い方: java DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス]");
             System.exit(1);
         }
 
@@ -27,7 +26,6 @@ public class DependencyAnalyzer {
             db = Understand.open(args[0]);
             String command = args[1];
             String outputPath = args.length > 2 ? args[2] : null;
-            String entityName = args.length > 3 ? args[3] : null;
 
             switch (command) {
                 case "file-deps":
@@ -38,9 +36,6 @@ public class DependencyAnalyzer {
                     break;
                 case "csv":
                     exportDependenciesCsv(db, outputPath);
-                    break;
-                case "graph":
-                    generateGraph(db, outputPath, entityName);
                     break;
                 default:
                     System.err.println("不明なコマンド: " + command);
@@ -121,23 +116,5 @@ public class DependencyAnalyzer {
             }
         }
         System.out.println("CSVを出力しました: " + outputPath);
-    }
-
-    /** 依存関係グラフ画像を生成 */
-    private static void generateGraph(Database db, String outputPath, String entityName)
-            throws UnderstandException {
-        if (outputPath == null || entityName == null) {
-            System.err.println("出力パスとエンティティ名を指定してください");
-            return;
-        }
-        Entity[] entities = db.ents("class ~unknown ~unresolved");
-        for (Entity ent : entities) {
-            if (ent.longname().equals(entityName) || ent.name().equals(entityName)) {
-                ent.draw("DependsOn", outputPath, null);
-                System.out.println("グラフを出力しました: " + outputPath);
-                return;
-            }
-        }
-        System.out.println("エンティティが見つかりません: " + entityName);
     }
 }

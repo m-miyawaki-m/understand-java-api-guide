@@ -7,16 +7,16 @@ Understand Java API を使えば、ファイル間やクラス間の依存関係
 - **変更影響範囲の把握** — あるクラスを修正した際に影響を受ける他のクラスやファイルを特定する
 - **アーキテクチャの健全性チェック** — レイヤー間の依存方向が設計方針に沿っているかを検証する
 
-本章では、`DependencyAnalyzer.java`（[ソースコード全文](samples/DependencyAnalyzer.java)）を使い、依存関係の取得からCSVエクスポート、グラフ画像の生成までを解説します。
+本章では、`DependencyAnalyzer.java`（[ソースコード全文](samples/DependencyAnalyzer.java)）を使い、依存関係の取得からCSVエクスポートまでを解説します。
 
 ## DependencyAnalyzer.java の概要
 
-`DependencyAnalyzer.java` は、コマンドライン引数でデータベースファイルとコマンドを受け取り、4 種類の依存関係分析を実行できるサンプルプログラムです。
+`DependencyAnalyzer.java` は、コマンドライン引数でデータベースファイルとコマンドを受け取り、3 種類の依存関係分析を実行できるサンプルプログラムです。
 
 ### 使い方
 
 ```
-java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス] [エンティティ名]
+java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス]
 ```
 
 ### コマンド一覧
@@ -26,7 +26,6 @@ java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマ�
 | `file-deps` | ファイル間依存関係を表示 | 不要 |
 | `class-deps` | クラス間依存関係を表示 | 不要 |
 | `csv` | 依存関係をCSVファイルに出力 | 出力パス |
-| `graph` | 依存関係グラフ画像を生成 | 出力パス、エンティティ名 |
 
 以下の各ユースケースでは、`SampleProject.java`（[ソースコード全文](samples/SampleProject.java)）を Understand で解析して作成した `sample.udb` を対象としています。
 
@@ -321,114 +320,15 @@ sample.SampleProject,sample.Task,6
 
 ---
 
-## ユースケース4: グラフ画像生成
-
-Understand Java API の `Entity.draw()` メソッドを使うと、エンティティの依存関係やコール関係などを画像ファイルとして出力できます。
-GUI を起動せずに、プログラムからグラフ画像を自動生成できるため、CI/CD パイプラインやレポート生成に組み込むことも可能です。
-
-### `Entity.draw()` の引数
-
-```java
-entity.draw(String graph, String filename, String options)
-```
-
-| 引数 | 説明 |
-|------|------|
-| `graph` | 生成するグラフの種類 |
-| `filename` | 出力ファイル名。拡張子で画像形式が決まる |
-| `options` | セミコロン区切りの設定文字列。`null` でデフォルト設定 |
-
-#### `graph` に指定できるグラフの種類
-
-| 値 | 説明 |
-|----|------|
-| `"DependsOn"` | 依存関係グラフ。対象エンティティが依存するエンティティを表示 |
-| `"Butterfly"` | バタフライグラフ。対象を中心に依存先と被依存を両方向に表示 |
-| `"Called By"` | 呼び出し元グラフ。対象メソッドを呼び出しているメソッドを表示 |
-| `"Calls"` | 呼び出し先グラフ。対象メソッドが呼び出しているメソッドを表示 |
-| `"Base Classes"` | 基底クラスグラフ。クラスの継承階層を表示 |
-| `"Declaration"` | 宣言グラフ。クラスのメンバー構造を表示 |
-| `"Control Flow"` | 制御フローグラフ。メソッド内の制御フローを表示 |
-
-#### `filename` で対応する画像形式
-
-| 拡張子 | 形式 |
-|-------|------|
-| `.jpg` | JPEG 画像 |
-| `.png` | PNG 画像 |
-| `.svg` | SVG（ベクター画像） |
-| `.vdx` | Visio XML |
-
-#### `options` に指定できる設定
-
-`options` は `null` を指定するとデフォルト設定で出力されます。カスタマイズする場合はセミコロン区切りで設定を記述します。
-
-| 設定 | 説明 | 例 |
-|------|------|----|
-| `Layout` | レイアウトアルゴリズム | `"Layout=Crossing"` |
-| `name` | ノードに表示する名前の形式 | `"name=Fullname"` |
-| `Level` | 表示する階層の深さ | `"Level=AllLevels"` |
-
-複数の設定を組み合わせる例：
-
-```java
-entity.draw("DependsOn", "output.png", "Layout=Crossing;name=Fullname;Level=AllLevels");
-```
-
-### コード
-
-```java
-/** 依存関係グラフ画像を生成 */
-private static void generateGraph(Database db, String outputPath, String entityName)
-        throws UnderstandException {
-    if (outputPath == null || entityName == null) {
-        System.err.println("出力パスとエンティティ名を指定してください");
-        return;
-    }
-    Entity[] entities = db.ents("class ~unknown ~unresolved");
-    for (Entity ent : entities) {
-        if (ent.longname().equals(entityName) || ent.name().equals(entityName)) {
-            ent.draw("DependsOn", outputPath, null);
-            System.out.println("グラフを出力しました: " + outputPath);
-            return;
-        }
-    }
-    System.out.println("エンティティが見つかりません: " + entityName);
-}
-```
-
-### 解説
-
-このメソッドでは、指定されたエンティティ名に一致するクラスを検索し、`draw()` メソッドで依存関係グラフを生成しています。
-
-- エンティティの検索は `longname()`（完全修飾名）と `name()`（短縮名）の両方で照合するため、`"sample.TaskManager"` でも `"TaskManager"` でも指定できます
-- `draw()` の第 3 引数に `null` を渡しているため、デフォルト設定でグラフが生成されます
-- 出力ファイルの拡張子によって画像形式が自動的に決まります
-
-### 実行例
-
-```bash
-# PNG 形式で依存関係グラフを出力
-java -cp "Understand.jar;." DependencyAnalyzer sample.udb graph deps.png TaskManager
-
-# SVG 形式で出力
-java -cp "Understand.jar;." DependencyAnalyzer sample.udb graph deps.svg sample.TaskManager
-```
-
-> **ヒント:** SVG 形式はベクター画像のため、拡大しても劣化しません。ドキュメントへの埋め込みや Web での表示に適しています。
-
----
-
 ## まとめ
 
-本章で解説した 4 つのユースケースの要点を以下にまとめます。
+本章で解説した 3 つのユースケースの要点を以下にまとめます。
 
 | ユースケース | 主な API | 用途 |
 |-------------|---------|------|
 | ファイル間依存関係 | `entity.depends()` | ファイル単位の依存関係を把握し、変更影響範囲を見積もる |
 | クラス間依存関係 | `entity.depends()` + `entity.dependsby()` | クラス間の双方向の依存関係を分析し、結合度を評価する |
 | CSV出力 | `PrintWriter` + `FileWriter` | 依存関係データを外部ツールで二次分析できる形式でエクスポートする |
-| グラフ画像生成 | `entity.draw(graph, filename, options)` | 依存関係を視覚的に表現し、レポートやドキュメントに活用する |
 
 `depends()` と `dependsby()` は [03 - コード構造の探索](03-code-exploration.md) で紹介した `refs()` の `call` / `callby` と同じく、順方向と逆方向のペアになっています。
 `refs()` が個々の参照レベルで関係を取得するのに対し、`depends()` / `dependsby()` はエンティティ単位で集約された依存関係を返すため、モジュール間の結合度の分析に適しています。
