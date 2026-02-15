@@ -296,4 +296,4 @@ finally {
 
 ---
 
-次章: [02 - エンティティとリファレンス](02-entities-and-references.md)
+次章: [02 - 主要概念（Core Concepts）](02-core-concepts.md)

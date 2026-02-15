@@ -284,9 +284,9 @@ first() → Lexeme → next() → Lexeme → next() → Lexeme → ... → null
 |---------|------|
 | `token()` | トークンの種類を文字列で返す |
 | `text()` | トークンのテキスト内容を返す |
-| `ent()` | 関連付けられた Entity を返す（`lookupEnts=true` の場合） |
-| `line_begin()` | トークンの開始行番号 |
-| `column_begin()` | トークンの開始列番号 |
+| `entity()` | 関連付けられた Entity を返す（`lookupEnts=true` の場合） |
+| `lineBegin()` | トークンの開始行番号 |
+| `columnBegin()` | トークンの開始列番号 |
 | `next()` | 次の Lexeme（末尾では `null`） |
 | `previous()` | 前の Lexeme（先頭では `null`） |
 
@@ -316,11 +316,11 @@ for (Entity file : files) {
     Lexer lexer = file.lexer(true, false, false);
     Lexeme lexeme = lexer.first();
     while (lexeme != null) {
-        if ("Identifier".equals(lexeme.token()) && lexeme.ent() != null) {
+        if ("Identifier".equals(lexeme.token()) && lexeme.entity() != null) {
             System.out.printf("  %s (Entity: %s, line: %d)%n",
                 lexeme.text(),
-                lexeme.ent().longname(),
-                lexeme.line_begin());
+                lexeme.entity().longname(),
+                lexeme.lineBegin());
         }
         lexeme = lexeme.next();
     }
@@ -382,4 +382,4 @@ db2.close();
 
 ---
 
-次章: [03 - エンティティの活用](03-entity-usage.md)
+次章: [03 - コード構造の探索（Code Exploration）](03-code-exploration.md)
