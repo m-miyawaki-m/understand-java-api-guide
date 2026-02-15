@@ -226,6 +226,8 @@ Reference の kindstring には**方向**の概念があります。
 | `import` | インポート | `importby` |
 | `create` | オブジェクト生成 | `createby` |
 | `typed` | 型の使用 | `typedby` |
+| `override` | メソッドオーバーライド | `overrideby` |
+| `couple` | 結合 | `coupleby` |
 
 使用例：
 

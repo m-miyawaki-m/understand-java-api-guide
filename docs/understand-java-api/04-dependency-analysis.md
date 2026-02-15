@@ -16,7 +16,7 @@ Understand Java API を使えば、ファイル間やクラス間の依存関係
 ### 使い方
 
 ```
-java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [出力パス]
+java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマンド> [引数]
 ```
 
 ### コマンド一覧
@@ -25,7 +25,7 @@ java -cp "Understand.jar;." DependencyAnalyzer <UDBファイルパス> <コマ�
 |---------|------|---------|
 | `file-deps` | ファイル間依存関係を表示 | 不要 |
 | `class-deps` | クラス間依存関係を表示 | 不要 |
-| `csv` | 依存関係をCSVファイルに出力 | 出力パス |
+| `csv-all` | コード構造情報をCSV一括出力 | 出力ディレクトリ |
 
 以下の各ユースケースでは、`SampleProject.java`（[ソースコード全文](samples/SampleProject.java)）を Understand で解析して作成した `sample.udb` を対象としています。
 
@@ -243,48 +243,205 @@ sample.SampleProject が依存するクラス:
 
 ---
 
-## ユースケース3: CSV出力
+## ユースケース3: コード構造情報のCSV一括出力
 
-依存関係データを CSV ファイルにエクスポートすることで、Excel や他のツールでの二次分析が可能になります。
+コード構造情報（クラス一覧・メソッド一覧・呼び出し関係）を CSV ファイルに一括エクスポートすることで、Excel や他のツールでの二次分析が可能になります。
 ここでは Java 標準ライブラリの `PrintWriter` と `FileWriter` のみを使用し、外部 CSV ライブラリは使いません。
 
-### 出力フォーマット
+### 出力ファイル一覧
 
-CSV ファイルは以下の形式で出力されます。
+`csv-all` コマンドは指定ディレクトリに以下の 4 ファイルを出力します。
 
+| ファイル | 内容 |
+|---------|------|
+| `classes.csv` | クラス一覧 |
+| `methods.csv` | メソッド定義一覧 |
+| `calls.csv` | 関数呼び出し一覧（あるメソッドが呼び出しているメソッド） |
+| `calledby.csv` | 関数の被呼び出し一覧（あるメソッドを呼び出しているメソッド） |
+
+### 各CSVのフォーマット
+
+**classes.csv（クラス一覧）**
+
+```csv
+クラス名,種別,ファイル名,定義行
+sample.Task,Java Class,SampleProject.java,38
+sample.TaskManager,Java Class,SampleProject.java,78
 ```
-依存元,依存先,参照数
+
+**methods.csv（メソッド定義一覧）**
+
+```csv
+クラス名,メソッド名,戻り値型,ファイル名,定義行
+sample.TaskManager,addTask,void,SampleProject.java,82
+sample.TaskManager,getTasksByPriority,List<Task>,SampleProject.java,91
 ```
 
-各列の意味：
+**calls.csv（関数呼び出し一覧）**
 
-| 列 | 説明 |
-|----|------|
-| 依存元 | 依存元クラスの完全修飾名 |
-| 依存先 | 依存先クラスの完全修飾名 |
-| 参照数 | 依存元から依存先への参照の件数 |
+```csv
+呼び出し元クラス,呼び出し元メソッド,呼び出し先クラス,呼び出し先メソッド,ファイル名,呼び出し行
+sample.TaskManager,addTask,sample.Task,getTitle,SampleProject.java,85
+sample.TaskManager,getTasksByPriority,sample.Task,getPriority,SampleProject.java,94
+```
+
+**calledby.csv（関数の被呼び出し一覧）**
+
+```csv
+対象クラス,対象メソッド,呼び出し元クラス,呼び出し元メソッド,ファイル名,呼び出し行
+sample.Task,getTitle,sample.TaskManager,addTask,SampleProject.java,85
+sample.Task,getPriority,sample.TaskManager,getTasksByPriority,SampleProject.java,94
+```
 
 ### コード
 
+一括出力の起点となる `exportAllCsv()` メソッドでは、出力ディレクトリの作成後、4 つの個別出力メソッドを順に呼び出します。
+
 ```java
-/** 依存関係をCSVファイルに出力（Java標準ライブラリのみ使用） */
-private static void exportDependenciesCsv(Database db, String outputPath) throws IOException {
-    if (outputPath == null) {
-        System.err.println("出力パスを指定してください");
+/** コード構造情報をCSVファイルに一括出力 */
+private static void exportAllCsv(Database db, String outputDir) throws IOException {
+    if (outputDir == null) {
+        System.err.println("出力ディレクトリを指定してください");
         return;
     }
+    File dir = new File(outputDir);
+    if (!dir.exists()) {
+        dir.mkdirs();
+    }
+
     Entity[] classes = db.ents("class ~unknown ~unresolved");
-    try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-        writer.println("依存元,依存先,参照数");
+
+    exportClassesCsv(classes, dir);
+    exportMethodsCsv(classes, dir);
+    exportCallsCsv(classes, dir);
+    exportCalledByCsv(classes, dir);
+
+    System.out.println("CSVを出力しました: " + dir.getAbsolutePath());
+}
+```
+
+各個別メソッドの実装を順に見ていきます。
+
+#### クラス一覧の出力
+
+クラス自身の `definein` 参照を使って、定義ファイルと行番号を取得します。
+
+```java
+/** クラス一覧をCSV出力 */
+private static void exportClassesCsv(Entity[] classes, File dir) throws IOException {
+    try (PrintWriter w = new PrintWriter(new FileWriter(new File(dir, "classes.csv")))) {
+        w.println("クラス名,種別,ファイル名,定義行");
         for (Entity cls : classes) {
-            Map<Entity, Reference[]> deps = cls.depends();
-            for (Map.Entry<Entity, Reference[]> entry : deps.entrySet()) {
-                writer.printf("%s,%s,%d%n",
-                    cls.longname(), entry.getKey().longname(), entry.getValue().length);
+            // クラス定義の参照を取得
+            Reference[] defRefs = cls.refs("definein", null, true);
+            String fileName = "";
+            int line = 0;
+            if (defRefs.length > 0) {
+                fileName = defRefs[0].file().name();
+                line = defRefs[0].line();
+            }
+            w.printf("%s,%s,%s,%d%n",
+                cls.longname(), cls.kind().name(), fileName, line);
+        }
+    }
+}
+```
+
+#### メソッド定義一覧の出力
+
+クラスの `define` 参照でメソッドを列挙し、各メソッドの名前・戻り値型・定義位置を出力します。
+
+```java
+/** メソッド定義一覧をCSV出力 */
+private static void exportMethodsCsv(Entity[] classes, File dir) throws IOException {
+    try (PrintWriter w = new PrintWriter(new FileWriter(new File(dir, "methods.csv")))) {
+        w.println("クラス名,メソッド名,戻り値型,ファイル名,定義行");
+        for (Entity cls : classes) {
+            // クラスが定義しているメソッドを取得
+            Reference[] methodRefs = cls.refs("define", "method", true);
+            for (Reference ref : methodRefs) {
+                Entity method = ref.ent();
+                w.printf("%s,%s,%s,%s,%d%n",
+                    cls.longname(), method.name(), method.type(),
+                    ref.file().name(), ref.line());
             }
         }
     }
-    System.out.println("CSVを出力しました: " + outputPath);
+}
+```
+
+#### 関数呼び出し一覧の出力
+
+各メソッドの `call` 参照で呼び出し先メソッドを列挙します。呼び出し先の所属クラスは `definein` 参照で逆引きします。
+
+```java
+/** 関数呼び出し一覧をCSV出力 */
+private static void exportCallsCsv(Entity[] classes, File dir) throws IOException {
+    try (PrintWriter w = new PrintWriter(new FileWriter(new File(dir, "calls.csv")))) {
+        w.println("呼び出し元クラス,呼び出し元メソッド,呼び出し先クラス,呼び出し先メソッド,ファイル名,呼び出し行");
+        for (Entity cls : classes) {
+            Reference[] methodRefs = cls.refs("define", "method", true);
+            for (Reference methodRef : methodRefs) {
+                Entity method = methodRef.ent();
+                // このメソッドが呼び出している他のメソッド
+                Reference[] callRefs = method.refs("call", "method", true);
+                for (Reference callRef : callRefs) {
+                    Entity calledMethod = callRef.ent();
+                    // 呼び出し先メソッドの所属クラスを取得
+                    String calledClass = getOwnerClassName(calledMethod);
+                    w.printf("%s,%s,%s,%s,%s,%d%n",
+                        cls.longname(), method.name(),
+                        calledClass, calledMethod.name(),
+                        callRef.file().name(), callRef.line());
+                }
+            }
+        }
+    }
+}
+```
+
+#### 関数の被呼び出し一覧の出力
+
+`calls.csv` の逆方向です。各メソッドの `callby` 参照で、そのメソッドを呼び出しているメソッドを列挙します。
+
+```java
+/** 関数の被呼び出し一覧をCSV出力 */
+private static void exportCalledByCsv(Entity[] classes, File dir) throws IOException {
+    try (PrintWriter w = new PrintWriter(new FileWriter(new File(dir, "calledby.csv")))) {
+        w.println("対象クラス,対象メソッド,呼び出し元クラス,呼び出し元メソッド,ファイル名,呼び出し行");
+        for (Entity cls : classes) {
+            Reference[] methodRefs = cls.refs("define", "method", true);
+            for (Reference methodRef : methodRefs) {
+                Entity method = methodRef.ent();
+                // このメソッドを呼び出しているメソッド
+                Reference[] callByRefs = method.refs("callby", "method", true);
+                for (Reference callByRef : callByRefs) {
+                    Entity callerMethod = callByRef.ent();
+                    String callerClass = getOwnerClassName(callerMethod);
+                    w.printf("%s,%s,%s,%s,%s,%d%n",
+                        cls.longname(), method.name(),
+                        callerClass, callerMethod.name(),
+                        callByRef.file().name(), callByRef.line());
+                }
+            }
+        }
+    }
+}
+```
+
+#### メソッドの所属クラス名の逆引き
+
+呼び出し先・呼び出し元のメソッドがどのクラスに属するかを `definein` 参照で逆引きするヘルパーメソッドです。
+
+```java
+/** メソッドの所属クラス名を取得するヘルパー */
+private static String getOwnerClassName(Entity method) {
+    // definein 参照でメソッドを定義しているクラスを逆引き
+    Reference[] defInRefs = method.refs("definein", "class", true);
+    if (defInRefs.length > 0) {
+        return defInRefs[0].ent().longname();
+    }
+    return "";
 }
 ```
 
@@ -292,31 +449,31 @@ private static void exportDependenciesCsv(Database db, String outputPath) throws
 
 CSV 出力のポイントは以下のとおりです。
 
+- **4 ファイル分割** — クラス・メソッド・呼び出し・被呼び出しを個別のCSVに分けることで、Excel やスプレッドシートでの二次分析（フィルタ・ピボットテーブル等）がしやすくなります。
 - **`try-with-resources`** を使用しているため、`PrintWriter` は処理完了時に自動的に閉じられます。例外発生時もリソースリークを防げます。
 - **`PrintWriter` + `FileWriter`** は Java 標準ライブラリのクラスです。外部ライブラリを追加する必要はありません。
-- **`writer.printf("%s,%s,%d%n", ...)`** でカンマ区切りのフォーマットを直接指定しています。
+- **`refs()` の使い分け** — `define` でメソッド定義、`call` / `callby` で呼び出し関係、`definein` で所属クラスの逆引きと、目的に応じて参照種別を使い分けています。
 
-> **注意:** このサンプルでは、クラスの完全修飾名にカンマが含まれないことを前提としています。
-> Java のクラス名にはカンマを使用できないため、通常のプロジェクトでは問題になりません。
+> **注意:** このサンプルでは、クラス名やメソッド名にカンマが含まれないことを前提としています。
+> Java の識別子にはカンマを使用できないため、通常のプロジェクトでは問題になりません。
 
 ### 実行例
 
 ```bash
-java -cp "Understand.jar;." DependencyAnalyzer sample.udb csv dependencies.csv
+java -cp "Understand.jar;." DependencyAnalyzer sample.udb csv-all output/
 ```
 
-### 出力CSV例
+### 出力例
 
-```csv
-依存元,依存先,参照数
-sample.Task,sample.BaseItem,3
-sample.Task,sample.Task.Priority,2
-sample.TaskManager,sample.Task,10
-sample.SampleProject,sample.TaskManager,5
-sample.SampleProject,sample.Task,6
+```
+CSVを出力しました: /path/to/output
+  - classes.csv（クラス一覧）
+  - methods.csv（関数定義一覧）
+  - calls.csv（関数呼び出し一覧）
+  - calledby.csv（関数の被呼び出し一覧）
 ```
 
-このCSVを Excel で開くと、依存関係の全体像を一覧表で確認でき、参照数でソートすることで結合度の高いクラスペアを特定できます。
+4 つの CSV を組み合わせることで、プロジェクト全体のコード構造を多角的に分析できます。たとえば、`calls.csv` と `calledby.csv` を突き合わせることで、特定のメソッドの呼び出しチェーンを追跡したり、呼び出し元が多いメソッド（ハブとなるメソッド）を特定したりできます。
 
 ---
 
@@ -328,7 +485,7 @@ sample.SampleProject,sample.Task,6
 |-------------|---------|------|
 | ファイル間依存関係 | `entity.depends()` | ファイル単位の依存関係を把握し、変更影響範囲を見積もる |
 | クラス間依存関係 | `entity.depends()` + `entity.dependsby()` | クラス間の双方向の依存関係を分析し、結合度を評価する |
-| CSV出力 | `PrintWriter` + `FileWriter` | 依存関係データを外部ツールで二次分析できる形式でエクスポートする |
+| CSV一括出力 | `entity.refs()` + `PrintWriter` | コード構造情報（クラス・メソッド・呼び出し関係）をCSVにエクスポートする |
 
 `depends()` と `dependsby()` は [03 - コード構造の探索](03-code-exploration.md) で紹介した `refs()` の `call` / `callby` と同じく、順方向と逆方向のペアになっています。
 `refs()` が個々の参照レベルで関係を取得するのに対し、`depends()` / `dependsby()` はエンティティ単位で集約された依存関係を返すため、モジュール間の結合度の分析に適しています。

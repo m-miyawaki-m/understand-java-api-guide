@@ -1,0 +1,35 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'docs/understand-java-api/samples'
+        }
+    }
+}
+
+dependencies {
+    implementation files("/mnt/c/Program Files/SciTools/bin/pc-win64/Java/Understand.jar")
+}
+
+application {
+    mainClass = project.findProperty('mainClass') ?: 'DependencyAnalyzer'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+run {
+    if (project.hasProperty('appArgs')) {
+        args project.appArgs.split(' ')
+    }
+}
